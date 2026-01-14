@@ -15,6 +15,7 @@ export default function VoiceChatPage() {
     isSpeaking,
     speechError,
     startListening,
+    stopListening,
     speak,
     stopSpeaking,
   } = useSpeech();
@@ -28,6 +29,7 @@ export default function VoiceChatPage() {
     const userMsg = { role: "user", content: userText };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
+    stopListening()
 
     try {
       const history = messages.slice(-10);
@@ -48,12 +50,25 @@ export default function VoiceChatPage() {
     }
   };
 
+  // ✅ Mic toggle: start/stop
   const handleMic = () => {
+    if (isListening) {
+      stopListening();
+      return;
+    }
+
     startListening((spokenText) => {
       setInput(spokenText);
-      // ✅ optionally auto-send after speaking:
+
+      // ✅ Optional: auto send after speaking (Siri style)
       // handleSend(spokenText);
     });
+  };
+
+  // ✅ Stop everything (mic + speech)
+  const handleStopAll = () => {
+    stopSpeaking();
+    stopListening();
   };
 
   return (
@@ -87,8 +102,9 @@ export default function VoiceChatPage() {
           setInput={setInput}
           onSend={() => handleSend()}
           onMic={handleMic}
-          onStop={stopSpeaking}
+          onStop={handleStopAll}
           isListening={isListening}
+          isSpeaking={isSpeaking}
         />
       </div>
     </div>

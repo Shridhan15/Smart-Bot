@@ -6,6 +6,7 @@ export default function useSpeech() {
     const [speechError, setSpeechError] = useState("");
 
     const recognitionRef = useRef(null);
+    const shouldKeepListeningRef = useRef(false);
 
     useEffect(() => {
         const SpeechRecognition =
@@ -18,8 +19,8 @@ export default function useSpeech() {
 
         const recognition = new SpeechRecognition();
         recognition.lang = "en-IN";
-        recognition.interimResults = false;
-        recognition.continuous = false;
+        recognition.interimResults = true; // ✅ partial results
+        recognition.continuous = true;     // ✅ don't stop on small pauses
 
         recognition.onstart = () => {
             setIsListening(true);
@@ -28,25 +29,75 @@ export default function useSpeech() {
 
         recognition.onend = () => {
             setIsListening(false);
+
+            // ✅ Auto restart if user didn't manually stop
+            if (shouldKeepListeningRef.current) {
+                setTimeout(() => {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        // ignore if already started
+                    }
+                }, 200);
+            }
         };
 
         recognition.onerror = (e) => {
             setSpeechError("Mic error: " + e.error);
             setIsListening(false);
+
+            // ✅ Try restarting on network/no-speech (optional)
+            if (
+                shouldKeepListeningRef.current &&
+                (e.error === "no-speech" || e.error === "network")
+            ) {
+                setTimeout(() => {
+                    try {
+                        recognition.start();
+                    } catch (err) { }
+                }, 400);
+            }
         };
 
         recognitionRef.current = recognition;
+
+        return () => {
+            recognition.stop();
+        };
     }, []);
 
     const startListening = (onResult) => {
         if (!recognitionRef.current) return;
 
+        setSpeechError("");
+        shouldKeepListeningRef.current = true;
+
         recognitionRef.current.onresult = (event) => {
-            const text = event.results?.[0]?.[0]?.transcript || "";
-            if (onResult) onResult(text);
+            // ✅ Build final text properly (continuous mode)
+            let finalText = "";
+            for (let i = 0; i < event.results.length; i++) {
+                if (event.results[i].isFinal) {
+                    finalText += event.results[i][0].transcript + " ";
+                }
+            }
+
+            finalText = finalText.trim();
+            if (finalText && onResult) onResult(finalText);
         };
 
-        recognitionRef.current.start();
+        try {
+            recognitionRef.current.start();
+        } catch (err) {
+            // already started
+        }
+    };
+
+    const stopListening = () => {
+        shouldKeepListeningRef.current = false;
+        try {
+            recognitionRef.current?.stop();
+        } catch (err) { }
+        setIsListening(false);
     };
 
     const speak = (text) => {
@@ -74,6 +125,7 @@ export default function useSpeech() {
         isSpeaking,
         speechError,
         startListening,
+        stopListening,  
         speak,
         stopSpeaking,
     };

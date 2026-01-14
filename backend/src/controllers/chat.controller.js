@@ -12,7 +12,7 @@ export const chatWithAI = async (req, res, next) => {
         const groq = getGroqClient();
 
         const completion = await groq.chat.completions.create({
-            model: "llama3-70b-8192",
+            model: "llama-3.1-8b-instant",
             messages: buildMessages(message, history),
             temperature: 0.7,
             max_tokens: 400,
