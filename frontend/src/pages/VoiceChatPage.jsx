@@ -4,11 +4,13 @@ import ChatBubble from "../components/ChatBubble";
 import ChatInput from "../components/ChatInput";
 import useSpeech from "../hooks/useSpeech";
 import { sendChatMessage } from "../services/chatApi";
+import { useRef } from "react";
 
 export default function VoiceChatPage() {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
+  const silenceTimer = useRef(null);
 
   const {
     isListening,
@@ -29,7 +31,7 @@ export default function VoiceChatPage() {
     const userMsg = { role: "user", content: userText };
     setMessages((prev) => [...prev, userMsg]);
     setInput("");
-    stopListening()
+    stopListening();
 
     try {
       const history = messages.slice(-10);
@@ -56,12 +58,20 @@ export default function VoiceChatPage() {
       stopListening();
       return;
     }
+    const unlockAudio = new Audio();
+    unlockAudio.play().catch(() => {});
+    window.speechSynthesis.resume(); // Wake up native synth too
 
     startListening((spokenText) => {
       setInput(spokenText);
 
-      // ✅ Optional: auto send after speaking (Siri style)
-      // handleSend(spokenText);
+      // Clear existing timer on every new word
+      if (silenceTimer.current) clearTimeout(silenceTimer.current);
+
+      // Set a new timer: if no new words for 2 seconds, send automatically
+      silenceTimer.current = setTimeout(() => {
+        handleSend(spokenText); // Auto-send
+      }, 2000);
     });
   };
 

@@ -1,122 +1,158 @@
 import { useEffect, useRef, useState } from "react";
+import { playElevenLabsAudio } from "../services/elevenLabsApi";
 
 export default function useSpeech() {
     const [isListening, setIsListening] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [speechError, setSpeechError] = useState("");
 
+    // Refs to keep objects alive during re-renders
     const recognitionRef = useRef(null);
-    const shouldKeepListeningRef = useRef(false);
+    const silenceTimerRef = useRef(null);
+    const currentAudioRef = useRef(null); // For ElevenLabs Audio
+    const synthRef = useRef(window.speechSynthesis); // For Native Fallback
 
     useEffect(() => {
+        // --- 1. Setup Speech Recognition ---
         const SpeechRecognition =
             window.SpeechRecognition || window.webkitSpeechRecognition;
 
         if (!SpeechRecognition) {
-            setSpeechError("Speech Recognition not supported (use Chrome/Edge).");
+            setSpeechError("Browser not supported (Use Chrome).");
             return;
         }
 
         const recognition = new SpeechRecognition();
         recognition.lang = "en-IN";
-        recognition.interimResults = true; // ✅ partial results
-        recognition.continuous = true;     // ✅ don't stop on small pauses
+        recognition.interimResults = true;
+        recognition.continuous = true;
 
-        recognition.onstart = () => {
-            setIsListening(true);
-            setSpeechError("");
-        };
-
-        recognition.onend = () => {
-            setIsListening(false);
-
-            // ✅ Auto restart if user didn't manually stop
-            if (shouldKeepListeningRef.current) {
-                setTimeout(() => {
-                    try {
-                        recognition.start();
-                    } catch (e) {
-                        // ignore if already started
-                    }
-                }, 200);
-            }
-        };
-
+        recognition.onstart = () => setIsListening(true);
+        recognition.onend = () => setIsListening(false);
         recognition.onerror = (e) => {
-            setSpeechError("Mic error: " + e.error);
+            // Ignore "no-speech" errors as they happen often in silence
+            if (e.error !== 'no-speech') setSpeechError("Mic error: " + e.error);
             setIsListening(false);
-
-            // ✅ Try restarting on network/no-speech (optional)
-            if (
-                shouldKeepListeningRef.current &&
-                (e.error === "no-speech" || e.error === "network")
-            ) {
-                setTimeout(() => {
-                    try {
-                        recognition.start();
-                    } catch (err) { }
-                }, 400);
-            }
         };
 
         recognitionRef.current = recognition;
 
+        // Cleanup on unmount
         return () => {
             recognition.stop();
+            if (currentAudioRef.current) {
+                currentAudioRef.current.pause();
+            }
+            synthRef.current.cancel();
         };
     }, []);
 
+    // --- 2. Listening Logic ---
     const startListening = (onResult) => {
         if (!recognitionRef.current) return;
-
         setSpeechError("");
-        shouldKeepListeningRef.current = true;
 
         recognitionRef.current.onresult = (event) => {
-            // ✅ Build final text properly (continuous mode)
-            let finalText = "";
+            // Create a unified text string from results
+            let interim = "";
+            let final = "";
+
             for (let i = 0; i < event.results.length; i++) {
                 if (event.results[i].isFinal) {
-                    finalText += event.results[i][0].transcript + " ";
+                    final += event.results[i][0].transcript + " ";
+                } else {
+                    interim += event.results[i][0].transcript;
                 }
             }
 
-            finalText = finalText.trim();
-            if (finalText && onResult) onResult(finalText);
+            // If we have final text, send it to the parent
+            const totalText = (final + interim).trim();
+            if (totalText && onResult) {
+                onResult(totalText);
+            }
         };
 
         try {
             recognitionRef.current.start();
-        } catch (err) {
-            // already started
+        } catch (e) {
+            // Already started
         }
     };
 
     const stopListening = () => {
-        shouldKeepListeningRef.current = false;
         try {
             recognitionRef.current?.stop();
-        } catch (err) { }
+        } catch (e) { }
         setIsListening(false);
     };
 
-    const speak = (text) => {
-        if (!window.speechSynthesis) return;
+    // --- 3. Speaking Logic (The Hybrid Fix) ---
+    const speak = async (text) => {
+        if (!text) return;
+        setIsSpeaking(true);
+        setSpeechError("");
 
-        window.speechSynthesis.cancel();
+        // 1. Stop any existing audio (Native or ElevenLabs)
+        if (currentAudioRef.current) {
+            currentAudioRef.current.pause();
+            currentAudioRef.current = null;
+        }
+        synthRef.current.cancel();
 
-        const utter = new SpeechSynthesisUtterance(text);
-        utter.rate = 1;
-        utter.pitch = 1;
+        try {
+            // --- Try ElevenLabs ---
+            const audio = await playElevenLabsAudio(text);
 
-        utter.onstart = () => setIsSpeaking(true);
-        utter.onend = () => setIsSpeaking(false);
+            // SAFETY CHECK: If function returned undefined, throw error manually
+            if (!audio) throw new Error("Audio object is undefined");
 
-        window.speechSynthesis.speak(utter);
+            currentAudioRef.current = audio;
+
+            audio.onended = () => {
+                setIsSpeaking(false);
+                currentAudioRef.current = null;
+            };
+
+        } catch (err) {
+            // --- Fallback to Native ---
+            console.warn("Switching to native voice due to error:", err.message);
+
+            // Small delay to prevent "Interrupted" error caused by the previous .cancel()
+            setTimeout(() => {
+                const utter = new SpeechSynthesisUtterance(text);
+
+                // Force a voice (improves stability)
+                const voices = synthRef.current.getVoices();
+                utter.voice = voices.find(v => v.lang.includes('en')) || null;
+
+                // Keep reference alive
+                window.currentUtterance = utter;
+
+                utter.onstart = () => setIsSpeaking(true);
+                utter.onend = () => {
+                    setIsSpeaking(false);
+                    delete window.currentUtterance;
+                };
+
+                utter.onerror = (e) => {
+                    // Ignore "interrupted" errors, they happen when typing fast
+                    if (e.error !== 'interrupted') {
+                        console.error("Native TTS Error", e);
+                        setIsSpeaking(false);
+                    }
+                };
+
+                synthRef.current.speak(utter);
+            }, 50); // 50ms delay is usually enough
+        }
     };
 
     const stopSpeaking = () => {
-        window.speechSynthesis.cancel();
+        if (currentAudioRef.current) {
+            currentAudioRef.current.pause();
+            setIsSpeaking(false);
+        }
+        synthRef.current.cancel();
         setIsSpeaking(false);
     };
 
@@ -125,7 +161,7 @@ export default function useSpeech() {
         isSpeaking,
         speechError,
         startListening,
-        stopListening,  
+        stopListening,
         speak,
         stopSpeaking,
     };
