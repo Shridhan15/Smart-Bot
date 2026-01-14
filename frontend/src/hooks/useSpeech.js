@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { playElevenLabsAudio } from "../services/elevenLabsApi";
+// import { playElevenLabsAudio } from "../services/elevenLabsApi";
+
+import { playAzureAudio } from "../services/azureSpeechApi";
 
 export default function useSpeech() {
     const [isListening, setIsListening] = useState(false);
@@ -101,7 +103,10 @@ export default function useSpeech() {
 
         try {
             // --- Try ElevenLabs ---
-            const audio = await playElevenLabsAudio(text);
+            // const audio = await playElevenLabsAudio(text);
+
+            // Switch to Azure
+            const audio = await playAzureAudio(text);
 
             // SAFETY CHECK: If function returned undefined, throw error manually
             if (!audio) throw new Error("Audio object is undefined");
